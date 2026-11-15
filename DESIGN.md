@@ -1,75 +1,83 @@
-# DUSTLINE — a three.js tactical FPS
+# DUSTLINE — design notes
 
-A round-based tactical FPS in a freight yard at dusk. VANGUARD (the player + 3
-bots) attacks; EMBER (4 bots) defends two bomb sites, A (warehouse) and B (fuel
-depot). First to 5 rounds wins the match (max 9).
+A round-based tactical FPS in the style Counter-Strike made famous, built
+from scratch on three.js 0.187.0: static files, ES modules, no build step,
+no network requests, single-player against bots.
 
-## How a round plays
+## The fantasy
 
-- **Buy phase (15s):** the buy menu opens. Spend round money on weapons,
-  grenades and armor (keys 1–5 or click; B closes the menu).
-- **Live round (100s):** plant the bomb at A or B (hold E on a site, 3.2s) or
-  eliminate EMBER. If the bomb is planted it blows after 35s unless a defender
-  defuses it (5s). If the clock runs out with no plant, EMBER wins the round.
-- **Money:** start $800. Kill +$300, plant +$300, round win +$3250, round loss
-  +$1900 (grows +$500 per consecutive loss, max $3400). Death costs the bought
-  primary, the armor and the grenades; the issued pistol and rifle stay.
+A dusty desert industrial yard at golden hour. EMBER (orange) attacks,
+SABLE (dusty teal) defends. The yard is readable at a glance: sand and
+ochre ground, rust trim, concrete walls, a warehouse yard at Site A, a
+fuel depot at Site B, and a double-door choke guarding the middle lane.
+The sun is low, dust drifts across the lanes, and every sightline ends in
+cover — no dead ends, no 200-metre cross-map shots.
 
-## Weapons
+## Rounds and the objective
 
-| Weapon | Price | Damage | Notes |
-|---|---|---|---|
-| P9 pistol | owned | 26 / 78 head | 12 rounds |
-| AR-77 rifle | owned | 34 / 100 head | 30 rounds, the workhorse |
-| VULCAN-9 SMG | $1500 | 22 / 66 head | 30 rounds, very fast |
-| LONGSHOT sniper | $4750 | 90 / 180 head | 5 rounds, right-click zoom |
-| HE grenade | $300 | up to 110 AoE | throw with G, 1.6s fuse |
-| Kevlar armor | $650 | — | halves damage taken |
+First team to 8 rounds takes the match (7–7 forces one deciding round).
+Each round opens with a 15-second buy phase — movement allowed, shop on
+B — then a 100-second live phase. EMBER wins by eliminating SABLE, or by
+planting the bomb at A or B and letting its 35-second fuse run out.
+SABLE wins by eliminating EMBER, by defusing a planted bomb (5-second
+hold), or by running the clock out with no plant. A banner names the
+winner and the reason, then a short intermission resets the yard.
 
-Spread grows with movement and shrinks when still or aiming, so stopping to
-aim pays. Headshots deal the listed head damage.
+The player starts each match carrying the bomb. If the player dies, the
+bomb drops where they fell; the nearest EMBER bot picks it up and carries
+on toward its site. A SABLE bot that reaches a planted bomb while the
+area is clear defuses it.
+
+## Economy
+
+Everyone starts a match with $800. A kill pays $300, a round win $3250,
+a round loss $1900. The shop sells five guns (pistol $300, SMG $1500,
+shotgun $1200, rifle $2700, sniper $4750), body armor $650 and a frag
+grenade $300. Unaffordable rows are greyed out; owned rows are gold.
+
+## Gunplay
+
+All weapons are hitscan with tracer lines and a muzzle flash. The pistol
+is fast and honest, the SMG sprays at short range, the shotgun fires eight
+pellets that end fights up close, the rifle is the all-rounder, and the
+sniper hits for 95 with a 4x scope on right mouse. Spread grows with
+movement and sustained fire and shrinks when crouched, standing still, or
+aiming — stopping to aim pays. Headshots deal double damage. Armor
+absorbs half of incoming damage until it is gone. Reload with R; the
+magazine and reserve are always in the bottom-right corner.
 
 ## Bots
 
-- **Attackers** advance on a site along a waypoint graph (BFS paths), plant
-  when they carry the bomb, and hold after it is planted.
-- **Defenders** hold a site angle, rotate toward gunshots they hear, rotate to
-  a planted bomb, and defuse it.
-- **Vision** is a real raycast: walls block sight. Reaction time scales with
-  distance and bot skill; shooting is hitscan in 3-round bursts with spread
-  that grows with range and target speed, so bots feel fair, not aimbot-perfect.
-- **The bomb** drops where its carrier dies; a friendly bot or the player picks
-  it up by walking over it.
+Four EMBER teammates and five SABLE defenders. EMBER bots split between
+the sites along the waypoint graph; the carrier pushes its site and
+plants when it arrives and the area is clear. SABLE bots hold a site each
+and rotate to a planted bomb on sound. In a fight a bot reacts after
+0.45–0.9 seconds, fires with aim error that grows with distance, and
+falls back to cover below 35 health. They are beatable but dangerous:
+they shoot back, they rotate, and they talk — short radio lines appear
+in the kill feed.
 
-## Presentation
+## Sound
 
-- Dusk palette: warm low sun from the west, cool blue fill, rust containers,
-  sand ground patches, glowing site zones. No textures, no models, no network.
-- HUD: health + armor, ammo, money, round timer, team score, kill feed, bomb
-  status, weapon slots, dynamic crosshair (gap = spread), hitmarker (red for
-  headshots), damage direction indicator, buy menu, round banner.
-- Sound: every effect synthesized with WebAudio (gunshots, reload, hit ticks,
-  explosion, bomb beeps, round stings, footsteps). No audio files.
+Everything is synthesized with the Web Audio API — no audio files. Each
+weapon has its own crack, plus reload clicks, footsteps, hit thuds, a
+round-start sting, win/loss jingles, bomb beeps that speed up as the
+fuse runs down, and a defuse tone. M mutes.
 
-## Files
+## Code shape
 
-- `game/index.html` — page + import map + HUD DOM.
-- `game/src/main.js` — boot, loop, shooting, grenades, round flow, captures.
-- `game/src/world.js` — the DUSTLINE YARD map, lighting, waypoint graph.
-- `game/src/bots.js` — bot AI (perception, paths, bursts, plant/defuse).
-- `game/src/weapons.js` — the arsenal, view models, spread, muzzle flash.
-- `game/src/bomb.js`, `economy.js`, `rounds.js` — the three state machines.
-- `game/src/hud.js`, `input.js`, `player.js`, `audio.js`, `palette.js`, `util.js`.
-- `screenshots/` — 1-play (cover), 2-buy, 3-end, 4-start; `?shot=` + seed
-  renders each deterministically and sets `window.__shotReady`.
-- `main.ts` — copies game/ + screenshots/ to /output and writes dossier.json.
+Thirteen modules, one job each: `util` (math, seeded random, ray
+tests), `palette` (the whole look in one place), `economy` (money and
+prices), `rounds` (the round state machine), `bomb` (plant/fuse/defuse),
+`input` (keyboard, mouse, pointer lock), `player` (movement, health,
+armor, camera), `audio` (synthesized sound), `world` (map, colliders,
+waypoints, dust), `hud` (all DOM, cached writes), `weapons` (firing,
+spread, recoil, tracers), `bots` (AI), `main.js` (a fixed 1/60 s
+simulation kept apart from rendering, plus the screenshot modes).
 
-## Verification done
+## Screenshot modes
 
-- All 13 modules pass `node --check`; the import graph resolves.
-- `main.ts` builds a dossier within the kit's caps (see the build log).
-- Headless Chrome (chrome-headless-shell, software GL) renders all four
-  `?shot=` captures with no console errors; the frames were eyeballed.
-- A CDP-driven play test confirmed: bots navigate the waypoint graph to the
-  sites, the buy phase hands over to the live round, and enemy bots damage the
-  player.
+`?shot=start` shows the title overlay and controls; `?shot=buy` opens
+the shop with $2800; `?shot=play` drops the player into a live round
+mid-fight; `?shot=end` shows the round-end banner at 1–0. Each accepts
+`&seed=1` to fix the randomness.
