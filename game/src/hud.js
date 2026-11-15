@@ -1,242 +1,162 @@
-// The DOM HUD: health, ammo, money, timer, score, kill feed, bomb status, buy
-// menu, banners and the crosshair. It never touches the simulation; main.js
-// pushes numbers in and reads callbacks out. Every setter is cheap and skips
-// work when nothing changed, so it can run every frame.
-import { formatMoney, formatTimer } from './util.js';
-
-const COPY = {
-  start: {
-    title: 'DUSTLINE',
-    copy: 'A tactical FPS in a freight yard at dusk. Plant the bomb at A or B, or wipe out EMBER. Click to play.',
-    action: 'Click to play',
-  },
-  paused: {
-    title: 'DUSTLINE',
-    copy: 'Paused. Click to resume.',
-    action: 'Click to resume',
-  },
-  matchWin: {
-    title: 'VANGUARD WINS',
-    copy: 'The yard is yours. EMBER never stood a chance.',
-    action: 'Play again',
-  },
-  matchLose: {
-    title: 'EMBER WINS',
-    copy: 'The yard stays theirs. Run it back.',
-    action: 'Play again',
-  },
-};
-
-export function createHud() {
-  const $ = (id) => document.getElementById(id);
-  const overlay = $('overlay');
-  const title = $('overlay-title');
-  const copy = $('overlay-copy');
-  const play = $('play');
-  const hud = $('hud');
-  const timer = $('timer');
-  const scoreV = $('score-v');
-  const scoreE = $('score-e');
-  const roundLabel = $('round-label');
-  const healthNum = $('health-num');
-  const healthBar = $('health-bar');
-  const armor = $('armor');
-  const ammoMag = $('ammo-mag');
-  const ammoReserve = $('ammo-reserve');
-  const weaponName = $('weapon-name');
-  const money = $('money');
-  const grenades = $('grenades');
-  const slots = $('slots');
-  const feed = $('feed');
-  const bombStatus = $('bomb-status');
-  const crosshair = $('crosshair');
-  const hitmarker = $('hitmarker');
-  const damageVignette = $('damage-vignette');
-  const damageDir = $('damage-dir');
-  const buyMenu = $('buy-menu');
-  const buyItems = $('buy-items');
-  const buyMoney = $('buy-money');
-  const banner = $('banner');
-  const bannerTitle = $('banner-title');
-  const bannerSub = $('banner-sub');
-  const actionBar = $('action-bar');
-  const actionLabel = $('action-label');
-  const actionFill = $('action-fill');
-
-  let hitTimer = 0;
-  let damageTimer = 0;
-  let bannerTimer = 0;
-  let last = {};
-  let buyHandler = null;
-
-  function setText(el, key, value) {
-    if (last[key] === value) return;
-    last[key] = value;
-    el.textContent = value;
+// hud.js — every DOM element the player sees: health/armor bars, ammo,
+// timer, score, money, team roster, kill feed, bomb line, crosshair,
+// hitmarker, buy menu and round banners. Writes are cached: a value is
+// only pushed to the DOM when it actually changed, so the HUD costs
+// nothing on frames where nothing changed.
+export class Hud {
+  constructor(doc) {
+    this.d = doc;
+    this.el = {};
+    for (const id of ['overlay', 'overlay-title', 'overlay-copy', 'play', 'hud', 'crosshair',
+      'hitmarker', 'health-num', 'health-fill', 'armor-num', 'armor-fill', 'armor-row',
+      'ammo-mag', 'ammo-reserve', 'ammo-label', 'timer', 'round-label', 'score-v', 'score-e',
+      'money', 'roster', 'killfeed', 'bomb-line', 'banner', 'banner-title', 'banner-sub',
+      'buy-menu', 'buy-items', 'buy-money', 'hint', 'weapon-name', 'grenade-count', 'mute-note']) {
+      this.el[id] = doc.getElementById(id);
+    }
+    this.cache = {};
+    this._hitTimer = 0;
+    this._bannerTimer = 0;
   }
 
-  return {
-    setHealth(hp) {
-      setText(healthNum, 'hp', String(Math.max(0, Math.ceil(hp))));
-      const pct = Math.max(0, Math.min(100, hp));
-      if (last.hpPct !== pct) {
-        last.hpPct = pct;
-        healthBar.style.width = `${pct}%`;
-        healthBar.classList.toggle('low', pct <= 30);
-      }
-    },
-    setArmor(hasArmor) {
-      if (last.armor === hasArmor) return;
-      last.armor = hasArmor;
-      armor.hidden = !hasArmor;
-    },
-    setAmmo(mag, reserve) {
-      setText(ammoMag, 'mag', String(mag));
-      setText(ammoReserve, 'res', `/ ${reserve}`);
-      const empty = mag === 0;
-      if (last.empty !== empty) {
-        last.empty = empty;
-        ammoMag.classList.toggle('empty', empty);
-      }
-    },
-    setWeapon(name, grenadeCount) {
-      setText(weaponName, 'weapon', name);
-      setText(grenades, 'grenades', grenadeCount > 0 ? `◉ ${grenadeCount}` : '');
-    },
-    setMoney(value) {
-      setText(money, 'money', formatMoney(value));
-      setText(buyMoney, 'buyMoney', formatMoney(value));
-    },
-    setTimer(seconds, phase) {
-      const text = phase === 'buy' ? `BUY ${formatTimer(seconds)}` : formatTimer(seconds);
-      setText(timer, 'timer', text);
-      const urgent = phase === 'live' && seconds <= 15;
-      if (last.urgent !== urgent) {
-        last.urgent = urgent;
-        timer.classList.toggle('urgent', urgent);
-      }
-    },
-    setScore(v, e, round, maxRounds) {
-      setText(scoreV, 'sv', String(v));
-      setText(scoreE, 'se', String(e));
-      setText(roundLabel, 'round', `ROUND ${round} / ${maxRounds}`);
-    },
-    setSlots(list, current) {
-      const key = list.map((s) => `${s.key}:${s.name}:${s.owned}`).join('|') + current;
-      if (last.slots === key) return;
-      last.slots = key;
-      slots.innerHTML = list
-        .map(
-          (s) =>
-            `<span class="slot${s.owned ? '' : ' locked'}${s.id === current ? ' current' : ''}">${s.key} ${s.name}</span>`,
-        )
-        .join('');
-    },
-    setBomb(text, urgent) {
-      setText(bombStatus, 'bomb', text);
-      if (last.bombUrgent !== urgent) {
-        last.bombUrgent = urgent;
-        bombStatus.classList.toggle('urgent', urgent);
-      }
-      bombStatus.hidden = text === '';
-    },
-    setCrosshair(spreadPx) {
-      crosshair.style.setProperty('--gap', `${spreadPx.toFixed(1)}px`);
-    },
-    hitMarker(killed, headshot) {
-      hitmarker.classList.add('on');
-      hitmarker.classList.toggle('head', headshot);
-      hitmarker.style.transform = killed
-        ? 'translate(-50%, -50%) rotate(45deg) scale(1.3)'
-        : '';
-      clearTimeout(hitTimer);
-      hitTimer = setTimeout(() => {
-        hitmarker.classList.remove('on');
-        hitmarker.classList.remove('head');
-        hitmarker.style.transform = '';
-      }, killed ? 160 : 90);
-    },
-    damageFrom(angleDeg) {
-      damageVignette.classList.add('on');
-      damageDir.style.transform = `rotate(${angleDeg}deg)`;
-      damageDir.classList.add('on');
-      clearTimeout(damageTimer);
-      damageTimer = setTimeout(() => {
-        damageVignette.classList.remove('on');
-        damageDir.classList.remove('on');
-      }, 450);
-    },
-    addKill(attacker, weapon, victim, headshot) {
-      const line = document.createElement('div');
-      line.className = 'feed-line';
-      line.innerHTML = `<span class="feed-a">${attacker}</span> <span class="feed-w">[${weapon}${headshot ? ' ★' : ''}]</span> <span class="feed-v">${victim}</span>`;
-      feed.prepend(line);
-      while (feed.children.length > 5) feed.removeChild(feed.lastChild);
-      setTimeout(() => line.classList.add('fade'), 4200);
-      setTimeout(() => line.remove(), 5000);
-    },
-    showBanner(titleText, subText) {
-      bannerTitle.textContent = titleText;
-      bannerSub.textContent = subText;
-      banner.hidden = false;
-      clearTimeout(bannerTimer);
-      // In a ?shot= capture the banner must stay up for the screenshot; in
-      // live play it fades after a few seconds.
-      if (new URLSearchParams(window.location.search).has('shot')) return;
-      bannerTimer = setTimeout(() => {
-        banner.hidden = true;
-      }, 3200);
-    },
-    hideBanner() {
-      banner.hidden = true;
-    },
-    showAction(label, progress) {
-      actionBar.hidden = false;
-      setText(actionLabel, 'action', label);
-      actionFill.style.width = `${Math.round(progress * 100)}%`;
-    },
-    hideAction() {
-      actionBar.hidden = true;
-    },
-    showBuy(items) {
-      buyMenu.hidden = false;
-      buyItems.innerHTML = items
-        .map(
-          (item) => `<button class="buy-item${item.owned ? ' owned' : ''}${item.affordable ? '' : ' poor'}" data-buy="${item.id}">
-          <span class="buy-key">${item.key}</span>
-          <span class="buy-name">${item.name}</span>
-          <span class="buy-desc">${item.desc}</span>
-          <span class="buy-price">${item.owned ? 'OWNED' : formatMoney(item.price)}</span>
-        </button>`,
-        )
-        .join('');
-      buyItems.querySelectorAll('[data-buy]').forEach((button) => {
-        button.addEventListener('click', () => {
-          if (buyHandler) buyHandler(button.dataset.buy);
-        });
-      });
-    },
-    hideBuy() {
-      buyMenu.hidden = true;
-    },
-    onBuy(handler) {
-      buyHandler = handler;
-    },
-    showOverlay(mode) {
-      const text = COPY[mode];
-      title.textContent = text.title;
-      copy.textContent = text.copy;
-      play.textContent = text.action;
-      overlay.hidden = false;
-      hud.hidden = true;
-      play.focus();
-    },
-    hideOverlay() {
-      overlay.hidden = true;
-      hud.hidden = false;
-    },
-    onPlay(handler) {
-      play.addEventListener('click', handler);
-    },
-  };
+  _set(id, text) {
+    if (this.cache[id] === text) return;
+    this.cache[id] = text;
+    const el = this.el[id];
+    if (el) el.textContent = text;
+  }
+
+  _bar(id, pct) {
+    const key = `bar:${id}`;
+    const v = Math.round(pct);
+    if (this.cache[key] === v) return;
+    this.cache[key] = v;
+    const el = this.el[id];
+    if (el) el.style.width = `${Math.max(0, Math.min(100, v))}%`;
+  }
+
+  showOverlay(title, copy) {
+    this._set('overlay-title', title);
+    this._set('overlay-copy', copy);
+    this.el.overlay.hidden = false;
+  }
+  hideOverlay() { this.el.overlay.hidden = true; }
+
+  banner(title, sub, color = '#ff8c3a') {
+    this._set('banner-title', title);
+    this._set('banner-sub', sub);
+    this.el.banner.style.borderColor = color;
+    this.el['banner-title'].style.color = color;
+    this.el.banner.hidden = false;
+    this._bannerTimer = 4.5;
+  }
+  hideBanner() { this.el.banner.hidden = true; }
+
+  kill(text) {
+    const feed = this.el.killfeed;
+    if (!feed) return;
+    const div = this.d.createElement('div');
+    div.className = 'feed-line';
+    div.textContent = text;
+    feed.prepend(div);
+    while (feed.children.length > 5) feed.removeChild(feed.lastChild);
+    setTimeout(() => { if (div.parentNode) div.classList.add('fade'); }, 5000);
+  }
+
+  addKill(killer, victim, weapon, head) {
+    this.kill(`${killer}  ✕  ${victim}${head ? '  [HEADSHOT]' : ''}   · ${weapon}`);
+  }
+
+  radio(text) { this.kill(`📻 ${text}`); }
+
+  hitmarker(head) {
+    const el = this.el.hitmarker;
+    el.classList.add('on');
+    el.style.color = head ? '#ff5a3c' : '#f0b429';
+    clearTimeout(this._hitTimer);
+    this._hitTimer = setTimeout(() => el.classList.remove('on'), 110);
+  }
+
+  // Build the buy menu rows once; update affordability + money per frame.
+  buildBuy(shop) {
+    const box = this.el['buy-items'];
+    box.innerHTML = '';
+    this._buyRows = {};
+    for (const item of shop) {
+      const row = this.d.createElement('div');
+      row.className = 'buy-row';
+      row.innerHTML = `<span class="buy-key">${item.key}</span><span class="buy-name"></span><span class="buy-desc"></span><span class="buy-price"></span>`;
+      row.querySelector('.buy-name').textContent = item.name;
+      row.querySelector('.buy-desc').textContent = item.desc;
+      row.querySelector('.buy-price').textContent = `$${item.price}`;
+      box.appendChild(row);
+      this._buyRows[item.id] = row;
+    }
+  }
+
+  renderBuy(shop, money, owned) {
+    if (!this._buyRows) return;
+    for (const item of shop) {
+      const row = this._buyRows[item.id];
+      const afford = money >= item.price;
+      row.classList.toggle('cant', !afford);
+      row.classList.toggle('owned', !!owned[item.id]);
+    }
+    this._set('buy-money', `$${money}`);
+  }
+
+  setBuyOpen(open) {
+    const key = 'buyOpen';
+    if (this.cache[key] === open) return;
+    this.cache[key] = open;
+    this.el['buy-menu'].hidden = !open;
+  }
+
+  setScoped(scoped) {
+    if (this.cache.scoped === scoped) return;
+    this.cache.scoped = scoped;
+    this.el.crosshair.classList.toggle('scoped', scoped);
+  }
+
+  setCrosshair(spreadPx) {
+    const s = 1 + Math.min(1.4, spreadPx / 26);
+    const key = Math.round(s * 20);
+    if (this.cache.chScale === key) return;
+    this.cache.chScale = key;
+    this.el.crosshair.style.transform = `translate(-50%, -50%) scale(${s.toFixed(2)})`;
+  }
+
+  setHint(text) { this._set('hint', text); }
+
+  update(s) {
+    this._set('health-num', String(Math.ceil(s.health)));
+    this._bar('health-fill', (s.health / 100) * 100);
+    this._set('armor-num', String(Math.ceil(s.armor)));
+    this._bar('armor-fill', (s.armor / 100) * 100);
+    this.el['armor-row'].style.opacity = s.armor > 0 ? '1' : '0.35';
+    this._set('money', `$${Math.floor(s.money)}`);
+    this._set('ammo-mag', s.reloading ? '--' : String(s.mag));
+    this._set('ammo-reserve', `/ ${s.reserve}`);
+    this._set('ammo-label', s.reloading ? 'RELOADING' : s.weaponName);
+    this._set('grenade-count', `◉ ${s.grenades}`);
+    this._set('timer', s.timerText);
+    this._set('round-label', `ROUND ${s.round}`);
+    this._set('score-v', String(s.scoreV));
+    this._set('score-e', String(s.scoreE));
+    this._set('bomb-line', s.bombLine);
+    this.el['bomb-line'].style.color = s.bombPlanted ? '#ff5a3c' : '#b8ab90';
+    // Roster: alive names bright, dead names struck through.
+    const rosterHtml = s.roster.map((r) => {
+      const cls = r.alive ? (r.team === 'EMBER' ? 'ember' : 'sable') : 'dead';
+      return `<div class="roster-row ${cls}">${r.alive ? '●' : '✕'} ${r.name}</div>`;
+    }).join('');
+    if (this.cache.roster !== rosterHtml) {
+      this.cache.roster = rosterHtml;
+      this.el.roster.innerHTML = rosterHtml;
+    }
+    if (this._bannerTimer > 0) {
+      this._bannerTimer -= s.dt;
+      if (this._bannerTimer <= 0) this.hideBanner();
+    }
+  }
 }

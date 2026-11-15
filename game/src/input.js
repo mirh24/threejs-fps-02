@@ -1,86 +1,94 @@
-// Keyboard and mouse, plus the pointer lock that turns the mouse into look.
-// Plain browser APIs only: the game asks the canvas for pointer lock and
-// reads movementX/Y while it holds it. Actions that fire once per key press
-// (use, grenade, cycle, buy menu, reload, weapon slots) are queued here and
-// read by main.js; movement keys stay in the live set. Aim (right mouse) is
-// held, not queued.
-export function createInput(canvas, onLockChange) {
-  const keys = new Set();
-  const state = { keys, locked: false, firing: false, aiming: false, lookX: 0, lookY: 0 };
-  const pressed = [];
-
-  function setKey(event, down) {
-    if (down) {
-      if (!event.repeat) {
-        if (event.code === 'KeyE') pressed.push('use');
-        if (event.code === 'KeyG') pressed.push('grenade');
-        if (event.code === 'KeyQ') pressed.push('cycle');
-        if (event.code === 'KeyB') pressed.push('buy');
-        if (event.code === 'KeyR') pressed.push('reload');
-        if (event.code === 'Digit1') pressed.push('slot1');
-        if (event.code === 'Digit2') pressed.push('slot2');
-        if (event.code === 'Digit3') pressed.push('slot3');
-        if (event.code === 'Digit4') pressed.push('slot4');
-        if (event.code === 'Digit5') pressed.push('slot5');
-      }
-      keys.add(event.code);
-    } else {
-      keys.delete(event.code);
-    }
-    if (event.code === 'Space') event.preventDefault();
+// input.js — keyboard, mouse and pointer lock. Keeps raw browser events out
+// of the game logic: the game reads keys, look deltas and edge-triggered
+// actions (pressed / released) once per fixed step.
+export class Input {
+  constructor() {
+    this.keys = new Set();
+    this.lookDX = 0;
+    this.lookDY = 0;
+    this.firing = false;
+    this.aiming = false;
+    this.locked = false;
+    this._pressed = new Set();
+    this._released = new Set();
+    this._onKey = null;
+    this._onClick = null;
+    this._attached = false;
+    this.shotMode = false; // screenshot modes never lock the pointer
   }
 
-  window.addEventListener('keydown', (event) => setKey(event, true));
-  window.addEventListener('keyup', (event) => setKey(event, false));
-  window.addEventListener('blur', () => {
-    keys.clear();
-    state.firing = false;
-    state.aiming = false;
-  });
-  window.addEventListener('mousemove', (event) => {
-    if (!state.locked) return;
-    state.lookX += event.movementX;
-    state.lookY += event.movementY;
-  });
-  window.addEventListener('mousedown', (event) => {
-    if (!state.locked) return;
-    if (event.button === 0) state.firing = true;
-    if (event.button === 2) state.aiming = true;
-  });
-  window.addEventListener('mouseup', (event) => {
-    if (event.button === 0) state.firing = false;
-    if (event.button === 2) state.aiming = false;
-  });
-  window.addEventListener('contextmenu', (event) => {
-    if (state.locked) event.preventDefault();
-  });
-  document.addEventListener('pointerlockchange', () => {
-    state.locked = document.pointerLockElement === canvas;
-    if (!state.locked) {
-      keys.clear();
-      state.firing = false;
-      state.aiming = false;
-    }
-    onLockChange(state.locked);
-  });
+  attach(canvas, callbacks = {}) {
+    if (this._attached) return;
+    this._attached = true;
+    this._onKey = callbacks.onKey || null;
+    this._onClick = callbacks.onClick || null;
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      this._pressed.add(e.code);
+      if (this._onKey) this._onKey(e.code);
+      if (['Space', 'Tab'].includes(e.code)) e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      this._released.add(e.code);
+    });
+    window.addEventListener('blur', () => { this.keys.clear(); this.firing = false; this.aiming = false; });
+    document.addEventListener('pointerlockchange', () => {
+      this.locked = document.pointerLockElement === canvas;
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!this.locked) return;
+      this.lookDX += e.movementX;
+      this.lookDY += e.movementY;
+    });
+    canvas.addEventListener('mousedown', (e) => {
+      if (this.shotMode) { if (e.button === 0) this.firing = true; return; }
+      if (!this.locked) {
+        if (this._onClick) this._onClick();
+        return;
+      }
+      if (e.button === 0) this.firing = true;
+      if (e.button === 2) this.aiming = true;
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.firing = false;
+      if (e.button === 2) this.aiming = false;
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
-  return {
-    state,
-    requestLock() {
-      canvas.requestPointerLock();
-    },
-    takeLook() {
-      const x = state.lookX;
-      const y = state.lookY;
-      state.lookX = 0;
-      state.lookY = 0;
-      return { x, y };
-    },
-    takePressed() {
-      if (pressed.length === 0) return [];
-      const out = pressed.slice();
-      pressed.length = 0;
-      return out;
-    },
-  };
+  requestLock(canvas) {
+    if (this.shotMode) return;
+    try {
+      // Newer Chrome returns a promise that rejects without a real user
+      // gesture (synthetic clicks in tests): swallow it, the game plays on.
+      const p = canvas.requestPointerLock();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch { /* headless or denied: play on */ }
+  }
+
+  down(code) { return this.keys.has(code); }
+  pressed(code) { return this._pressed.has(code); }
+  released(code) { return this._released.has(code); }
+
+  // Consume the accumulated look delta for this step.
+  consumeLook() {
+    const out = { dx: this.lookDX, dy: this.lookDY };
+    this.lookDX = 0;
+    this.lookDY = 0;
+    return out;
+  }
+
+  endStep() { this._pressed.clear(); this._released.clear(); }
+
+  get moveX() {
+    return (this.down('KeyD') ? 1 : 0) - (this.down('KeyA') ? 1 : 0);
+  }
+  get moveZ() {
+    return (this.down('KeyW') ? 1 : 0) - (this.down('KeyS') ? 1 : 0);
+  }
+  get crouch() { return this.down('ControlLeft') || this.down('KeyC'); }
+  get walk() { return this.down('ShiftLeft') || this.down('ShiftRight'); }
+  get jump() { return this.down('Space'); }
 }

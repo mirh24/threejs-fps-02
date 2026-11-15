@@ -1,20 +1,51 @@
-// The look plan in one place. DUSTLINE YARD is a freight yard at dusk: a warm
-// low sun, cool blue shadows, rust-red containers and sand-coloured ground.
-// The same names are the CSS custom properties in index.html; the two team
-// colours are the only extra entries.
+// palette.js — the single source of truth for DUSTLINE's look.
+// Sand, ochre and rust for the desert yard, dusty teal for SABLE, ember orange
+// for the player's team. HUD and world both read from here so the game reads
+// as one place, not a pile of unrelated colours.
 export const PALETTE = {
-  canvas: '#191410', // sky and fog
-  surface: '#2b2118', // ground and big walls
-  hairline: '#4d3d2a', // crates, containers, cover
-  ink: '#f2e8d5', // light surfaces and HUD text
-  muted: '#a89880', // dim text and distant detail
-  accent: '#ff8c2f', // the sun, muzzle flash, highlights
-  rust: '#8a4a28', // containers and barrels
-  sand: '#c9a86a', // ground patches and site markers
-  teamBlue: '#4a90d9', // VANGUARD, the attackers (the player)
-  teamRed: '#e8532f', // EMBER, the defenders
+  skyTop: 0x7fb2c9,
+  skyHorizon: 0xe8c98f,
+  fog: 0xd9b98a,
+  sun: 0xffe3b0,
+  ground: 0xc9a06b,
+  groundDark: 0xa87f4e,
+  sandLight: 0xe0bd85,
+  ochre: 0xc98f3d,
+  rust: 0x9a4a28,
+  rustDark: 0x6e3018,
+  teal: 0x2e6f6a,
+  tealDark: 0x1d4a46,
+  tealBright: 0x4fb3a8,
+  ember: 0xe8641c,
+  emberBright: 0xff8c3a,
+  emberDark: 0x8f3a08,
+  crate: 0xb98a4e,
+  crateDark: 0x8a5f30,
+  metal: 0x5d6b70,
+  metalDark: 0x39444a,
+  concrete: 0x9c968c,
+  concreteDark: 0x6f6a60,
+  tank: 0x7a8a7f,
+  tankRust: 0x8a5a34,
+  door: 0x3d4a4f,
+  wall: 0xb59a6a,
+  wallTop: 0x8a6f45,
+  ink: 0xefe8d8,
+  muted: 0xb8ab90,
+  danger: 0xd43a2a,
+  good: 0x7fc24a,
+  gold: 0xf0b429,
 };
 
-export function shade(name) {
-  return PALETTE[name];
-}
+export const CSS = {
+  ink: '#efe8d8',
+  muted: '#b8ab90',
+  ember: '#ff8c3a',
+  teal: '#4fb3a8',
+  danger: '#ff5a3c',
+  good: '#8fd45a',
+  gold: '#f0b429',
+  panel: 'rgba(16, 14, 10, 0.82)',
+  panelSolid: '#171310',
+  hairline: 'rgba(239, 232, 216, 0.22)',
+};

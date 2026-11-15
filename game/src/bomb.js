@@ -1,91 +1,113 @@
-// The bomb: carried, dropped, planted, defused or exploded. A single state
-// machine. Planting takes 3.2s holding E on a site, defusing 5s holding E by
-// the bomb, and a planted bomb blows after 35s. The only rendering here is the
-// blinking light on the bomb itself plus a beep timer; the HUD draws the rest.
-import * as THREE from 'three';
-import { PALETTE } from './palette.js';
-
-export const PLANT_TIME = 3.2;
+// bomb.js — the objective. States: 'carried' (someone holds it), 'dropped',
+// 'planted' (35s fuse ticking), 'defused', 'detonated'. Planting takes a
+// 2.5s hold near a site, defusing a 5s hold near a planted bomb. Progress
+// resets the moment the holder steps away or takes damage.
+export const PLANT_TIME = 2.5;
 export const DEFUSE_TIME = 5;
-export const BOMB_TIMER = 35;
+export const FUSE_TIME = 35;
 
-export function createBomb(scene) {
-  const group = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.34, 0.22, 0.26),
-    new THREE.MeshStandardMaterial({
-      color: new THREE.Color(PALETTE.surface),
-      roughness: 0.5,
-      metalness: 0.4,
-    }),
-  );
-  const lamp = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 0.05, 0.08),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(PALETTE.accent) }),
-  );
-  lamp.position.set(0.1, 0.13, 0);
-  group.add(body, lamp);
-  group.visible = false;
-  scene.add(group);
+export class Bomb {
+  constructor() {
+    this.state = {
+      mode: 'carried', // carried | dropped | planted | defused | detonated
+      site: null, // 'A' | 'B' | null
+      fuse: FUSE_TIME,
+      plantProgress: 0,
+      defuseProgress: 0,
+      carrier: 'player', // 'player' | bot id | null
+      x: 0,
+      z: 0,
+    };
+    this.onPlanted = null;
+    this.onDetonated = null;
+    this.onDefused = null;
+    this.onDropped = null;
+  }
 
-  const state = {
-    mode: 'carried', // carried | dropped | planted | defused | exploded
-    carrier: null, // 'player' or a bot object
-    site: null,
-    pos: new THREE.Vector3(),
-    plantProgress: 0,
-    defuseProgress: 0,
-    timer: BOMB_TIMER,
-    beepAt: 0,
-  };
+  reset(carrier = 'player') {
+    this.state.mode = 'carried';
+    this.state.site = null;
+    this.state.fuse = FUSE_TIME;
+    this.state.plantProgress = 0;
+    this.state.defuseProgress = 0;
+    this.state.carrier = carrier;
+    this.state.x = 0;
+    this.state.z = 0;
+  }
 
-  return {
-    state,
-    group,
-    giveTo(carrier) {
-      state.mode = 'carried';
-      state.carrier = carrier;
-      group.visible = false;
-    },
-    dropAt(pos) {
-      state.mode = 'dropped';
-      state.carrier = null;
-      state.pos.copy(pos);
-      state.pos.y = 0.12;
-      group.position.copy(state.pos);
-      group.visible = true;
-    },
-    plantAt(siteKey, pos) {
-      state.mode = 'planted';
-      state.site = siteKey;
-      state.pos.copy(pos);
-      state.pos.y = 0.12;
-      state.timer = BOMB_TIMER;
-      state.beepAt = 0;
-      group.position.copy(state.pos);
-      group.visible = true;
-    },
-    reset() {
-      state.mode = 'carried';
-      state.carrier = null;
-      state.site = null;
-      state.plantProgress = 0;
-      state.defuseProgress = 0;
-      state.timer = BOMB_TIMER;
-      group.visible = false;
-    },
-    step(dt, now, onBeep) {
-      if (state.mode !== 'planted') return;
-      state.timer -= dt;
-      const urgent = state.timer < 10;
-      const interval = urgent ? 0.35 : 0.9;
-      if (now >= state.beepAt) {
-        state.beepAt = now + interval;
-        onBeep(urgent);
-      }
-      // The light blinks faster as the timer runs down.
-      const lit = Math.sin(now * (urgent ? 22 : 7)) > 0;
-      lamp.material.color.set(lit ? PALETTE.accent : PALETTE.teamRed);
-    },
-  };
+  get planted() { return this.state.mode === 'planted'; }
+
+  // holding: true while the actor stands at a site holding E. Returns true
+  // the moment the plant completes.
+  tickPlant(dt, holding, site) {
+    const s = this.state;
+    if (s.mode !== 'carried' && s.mode !== 'dropped') return false;
+    if (!holding || !site) { s.plantProgress = 0; return false; }
+    s.plantProgress += dt;
+    if (s.plantProgress >= PLANT_TIME) {
+      s.mode = 'planted';
+      s.site = site;
+      s.fuse = FUSE_TIME;
+      s.plantProgress = 0;
+      if (this.onPlanted) this.onPlanted(site);
+      return true;
+    }
+    return false;
+  }
+
+  // holding: true while a defender stands at the planted bomb holding E.
+  tickDefuse(dt, holding) {
+    const s = this.state;
+    if (s.mode !== 'planted') return false;
+    if (!holding) { s.defuseProgress = 0; return false; }
+    s.defuseProgress += dt;
+    if (s.defuseProgress >= DEFUSE_TIME) {
+      s.mode = 'defused';
+      s.defuseProgress = 0;
+      if (this.onDefused) this.onDefused(s.site);
+      return true;
+    }
+    return false;
+  }
+
+  // Fuse countdown while planted. Returns true the moment it blows.
+  tickFuse(dt) {
+    const s = this.state;
+    if (s.mode !== 'planted') return false;
+    s.fuse -= dt;
+    if (s.fuse <= 0) {
+      s.mode = 'detonated';
+      if (this.onDetonated) this.onDetonated(s.site);
+      return true;
+    }
+    return false;
+  }
+
+  drop(x, z) {
+    const s = this.state;
+    if (s.mode !== 'carried') return;
+    s.mode = 'dropped';
+    s.carrier = null;
+    s.x = x; s.z = z;
+    s.plantProgress = 0;
+    if (this.onDropped) this.onDropped(x, z);
+  }
+
+  pickup(carrier) {
+    const s = this.state;
+    if (s.mode !== 'dropped') return false;
+    s.mode = 'carried';
+    s.carrier = carrier;
+    return true;
+  }
+
+  statusLine() {
+    const s = this.state;
+    if (s.mode === 'planted') return `BOMB PLANTED — SITE ${s.site} — ${Math.ceil(s.fuse)}s`;
+    if (s.mode === 'carried') return s.carrier === 'player' ? 'BOMB: YOU CARRY IT — PLANT AT A OR B' : 'BOMB: CARRIED BY A TEAMMATE';
+    if (s.mode === 'dropped') return 'BOMB DROPPED — PICK IT UP';
+    if (s.mode === 'defused') return 'BOMB DEFUSED';
+    if (s.mode === 'detonated') return 'BOMB DETONATED';
+    return '';
+  }
 }

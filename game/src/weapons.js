@@ -1,260 +1,220 @@
-// Weapons: four guns and a grenade, each with its own numbers, view model and
-// sound kind. One module owns the arsenal; main.js owns the ray and the
-// damage. Spread grows with movement and shrinks when still or aiming, so
-// stopping to aim pays. A sniper zooms with right mouse.
+// weapons.js — weapon definitions, firing, spread, recoil, reload and
+// tracers. All hitscan: a ray from the camera is tested against bot hit
+// spheres (head r=0.24, body r=0.46) and against wall boxes; the nearest
+// hit wins. Spread grows with movement and firing, shrinks when crouched
+// or still; headshots deal double damage.
 import * as THREE from 'three';
-import { PALETTE } from './palette.js';
+import { clamp, rayHitsBox, rayHitsSphere } from './util.js';
 
 export const WEAPONS = {
-  pistol: {
-    id: 'pistol', name: 'P9', kind: 'pistol', price: 0,
-    damage: 26, headDamage: 78, mag: 12, reserve: 48,
-    fireGap: 0.16, reloadTime: 1.4, spreadStill: 0.003, spreadMoving: 0.02,
-    auto: false, zoom: 1,
-  },
-  rifle: {
-    id: 'rifle', name: 'AR-77', kind: 'rifle', price: 2700,
-    damage: 34, headDamage: 100, mag: 30, reserve: 90,
-    fireGap: 0.096, reloadTime: 1.9, spreadStill: 0.0022, spreadMoving: 0.028,
-    auto: true, zoom: 1,
-  },
-  smg: {
-    id: 'smg', name: 'VULCAN-9', kind: 'smg', price: 1500,
-    damage: 22, headDamage: 66, mag: 30, reserve: 120,
-    fireGap: 0.06, reloadTime: 1.6, spreadStill: 0.006, spreadMoving: 0.034,
-    auto: true, zoom: 1,
-  },
-  sniper: {
-    id: 'sniper', name: 'LONGSHOT', kind: 'sniper', price: 4750,
-    damage: 90, headDamage: 180, mag: 5, reserve: 15,
-    fireGap: 1.15, reloadTime: 2.6, spreadStill: 0.0004, spreadMoving: 0.05,
-    auto: false, zoom: 2.6,
-  },
+  pistol: { id: 'pistol', name: 'Sidewinder', kind: 'pistol', damage: 34, headMult: 2, mag: 12, reserve: 48, fireRate: 0.16, reloadTime: 1.1, spread: 0.011, moveSpread: 0.02, range: 60, auto: false, zoom: 1, kick: 0.011, tracer: 0xffc46b },
+  smg: { id: 'smg', name: 'Hornet', kind: 'smg', damage: 22, headMult: 2, mag: 30, reserve: 120, fireRate: 0.085, reloadTime: 1.5, spread: 0.02, moveSpread: 0.035, range: 34, auto: true, zoom: 1, kick: 0.008, tracer: 0xffd27a },
+  shotgun: { id: 'shotgun', name: 'Mauler', kind: 'shotgun', damage: 14, headMult: 2, mag: 7, reserve: 28, fireRate: 0.85, reloadTime: 2.2, spread: 0.055, moveSpread: 0.03, range: 20, auto: false, zoom: 1, pellets: 8, kick: 0.05, tracer: 0xff9a4d },
+  rifle: { id: 'rifle', name: 'Longhorn', kind: 'rifle', damage: 32, headMult: 2, mag: 30, reserve: 90, fireRate: 0.115, reloadTime: 1.7, spread: 0.008, moveSpread: 0.024, range: 80, auto: true, zoom: 1.4, kick: 0.014, tracer: 0xffe08a },
+  sniper: { id: 'sniper', name: 'Dunehawk', kind: 'sniper', damage: 95, headMult: 2, mag: 5, reserve: 15, fireRate: 1.15, reloadTime: 2.6, spread: 0.001, moveSpread: 0.05, range: 120, auto: false, zoom: 4, kick: 0.07, tracer: 0xfff2c0 },
 };
 
-export const GRENADE_PRICE = 300;
-export const ARMOR_PRICE = 650;
-const MUZZLE_TIME = 0.06;
+export const GRENADE = { id: 'grenade', name: 'Frag grenade', damage: 110, radius: 6.5, fuse: 1.4 };
 
-function buildViewModel(def) {
-  const grip = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(PALETTE.hairline),
-    roughness: 0.7,
-    metalness: 0.2,
-  });
-  const body = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(PALETTE.ink),
-    roughness: 0.5,
-    metalness: 0.35,
-  });
-  const dark = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(PALETTE.surface),
-    roughness: 0.6,
-    metalness: 0.3,
-  });
-  const model = new THREE.Group();
-  if (def.id === 'pistol') {
-    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.24), body);
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.14, 0.06), grip);
-    handle.position.set(0, -0.09, 0.07);
-    model.add(slide, handle);
-    model.position.set(0.2, -0.21, -0.5);
-  } else if (def.id === 'sniper') {
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.09, 0.5), body);
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.55), dark);
-    barrel.position.set(0, 0.02, -0.5);
-    const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.22, 12), dark);
-    scope.rotation.x = Math.PI / 2;
-    scope.position.set(0, 0.075, -0.05);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.07, 0.24), grip);
-    stock.position.set(0, -0.015, 0.34);
-    model.add(receiver, barrel, scope, stock);
-    model.position.set(0.22, -0.22, -0.56);
-  } else if (def.id === 'smg') {
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.34), body);
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 0.26), grip);
-    barrel.position.set(0, 0.02, -0.28);
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.2, 0.07), dark);
-    mag.position.set(0, -0.13, -0.02);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.16), grip);
-    stock.position.set(0, -0.01, 0.24);
-    model.add(receiver, barrel, mag, stock);
-    model.position.set(0.23, -0.22, -0.52);
-  } else {
-    // rifle
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.42), body);
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.4), grip);
-    barrel.position.set(0, 0.025, -0.38);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.08, 0.22), grip);
-    stock.position.set(0, -0.02, 0.3);
-    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.08), dark);
-    sight.position.set(0, 0.075, -0.05);
-    model.add(receiver, barrel, stock, sight);
-    model.position.set(0.24, -0.22, -0.54);
-  }
-  model.scale.setScalar(0.78);
-  model.userData.baseZ = model.position.z;
-  return model;
-}
-
-export function createWeapons(camera) {
-  const models = {};
-  for (const def of Object.values(WEAPONS)) {
-    const model = buildViewModel(def);
-    model.visible = false;
-    camera.add(model);
-    models[def.id] = model;
+export class WeaponSys {
+  constructor(scene) {
+    this.scene = scene;
+    this.owned = {}; // id -> { mag, reserve }
+    this.current = 'pistol';
+    this.grenades = 0;
+    this.lastShot = -10;
+    this.reloading = 0;
+    this.reloadTotal = 0;
+    this.heat = 0; // bloom from sustained fire
+    this.tracers = [];
+    this._tracerGeo = new THREE.BufferGeometry();
+    this._tracerGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    this.onShot = null; // (kind)
+    this.onDryFire = null;
+    this.onReloadStart = null;
+    this.onHit = null; // (target, damage, headshot, killed)
+    this.onKill = null;
   }
 
-  // Muzzle flash: two thin crossed planes, a starburst rather than a solid square.
-  const flashMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(PALETTE.accent),
-    transparent: true,
-    opacity: 0.7,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  const flash = new THREE.Group();
-  const flashA = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.035), flashMat);
-  const flashB = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.035), flashMat);
-  flashA.rotation.z = Math.PI / 4;
-  flashB.rotation.z = -Math.PI / 4;
-  flash.add(flashA, flashB);
-  flash.position.set(0.24, -0.16, -0.88);
-  flash.visible = false;
-  camera.add(flash);
-
-  const flashLight = new THREE.PointLight(new THREE.Color(PALETTE.accent), 0, 5);
-  flashLight.position.set(0.24, -0.16, -0.6);
-  camera.add(flashLight);
-
-  const state = {
-    current: 'rifle',
-    mag: WEAPONS.rifle.mag,
-    reserve: WEAPONS.rifle.reserve,
-    cooldown: 0,
-    reloadLeft: 0,
-    flash: 0,
-    kick: 0,
-    grenades: 0,
-    armor: false,
-    owned: { pistol: true, rifle: true },
-  };
-
-  function def() {
-    return WEAPONS[state.current];
-  }
-
-  function showModel() {
-    for (const [id, model] of Object.entries(models)) {
-      model.visible = id === state.current;
+  reset(loadout) {
+    this.owned = {};
+    for (const id of loadout) {
+      const w = WEAPONS[id];
+      this.owned[id] = { mag: w.mag, reserve: w.reserve };
     }
+    if (!this.owned.pistol) this.owned.pistol = { mag: WEAPONS.pistol.mag, reserve: WEAPONS.pistol.reserve };
+    this.current = loadout.includes('rifle') ? 'rifle' : 'pistol';
+    this.grenades = 0;
+    this.lastShot = -10;
+    this.reloading = 0;
+    this.heat = 0;
   }
-  showModel();
 
-  function step(dt) {
-    state.cooldown = Math.max(0, state.cooldown - dt);
-    state.flash = Math.max(0, state.flash - dt);
-    state.kick += (0 - state.kick) * Math.min(1, dt * 14);
-    const model = models[state.current];
-    model.position.z = model.userData.baseZ + state.kick;
-    model.rotation.x = state.kick * 2.2;
-    flash.visible = state.flash > 0;
-    flashLight.intensity = state.flash > 0 ? 18 : 0;
-    if (state.reloadLeft > 0) {
-      state.reloadLeft = Math.max(0, state.reloadLeft - dt);
-      model.rotation.x = -0.55 * Math.min(1, (def().reloadTime - state.reloadLeft) * 2);
-      if (state.reloadLeft === 0) {
-        const need = def().mag - state.mag;
-        const take = Math.min(need, state.reserve);
-        state.mag += take;
-        state.reserve -= take;
+  get def() { return WEAPONS[this.current]; }
+  get state() { return this.owned[this.current]; }
+
+  give(id) {
+    if (this.owned[id]) {
+      this.owned[id].reserve += WEAPONS[id].reserve;
+      return false;
+    }
+    this.owned[id] = { mag: WEAPONS[id].mag, reserve: WEAPONS[id].reserve };
+    this.current = id;
+    return true;
+  }
+
+  switchTo(id) {
+    if (!this.owned[id] || this.current === id) return false;
+    this.current = id;
+    this.reloading = 0;
+    this.heat = 0;
+    return true;
+  }
+
+  // Current spread in radians: base + movement + heat, crouch/stand-still bonus.
+  spreadFor(moving, crouched, aiming) {
+    const w = this.def;
+    let s = w.spread + (moving ? w.moveSpread : 0) + this.heat * 0.02;
+    if (crouched) s *= 0.6;
+    if (aiming) s *= 0.55;
+    return s;
+  }
+
+  canFire(now) {
+    return this.reloading <= 0 && now - this.lastShot >= this.def.fireRate;
+  }
+
+  startReload(now) {
+    const st = this.state;
+    if (!st || this.reloading > 0 || st.mag >= this.def.mag || st.reserve <= 0) return false;
+    this.reloading = this.def.reloadTime;
+    this.reloadTotal = this.def.reloadTime;
+    if (this.onReloadStart) this.onReloadStart();
+    return true;
+  }
+
+  update(now, dt) {
+    this.heat = Math.max(0, this.heat - dt * 0.9);
+    if (this.reloading > 0) {
+      this.reloading -= dt;
+      if (this.reloading <= 0) {
+        this.reloading = 0;
+        const st = this.state, w = this.def;
+        const need = w.mag - st.mag;
+        const take = Math.min(need, st.reserve);
+        st.mag += take;
+        st.reserve -= take;
+      }
+    }
+    // Fade tracers out.
+    for (let i = this.tracers.length - 1; i >= 0; i -= 1) {
+      const t = this.tracers[i];
+      t.life -= dt * 6;
+      t.line.material.opacity = Math.max(0, t.life);
+      if (t.life <= 0) {
+        this.scene.remove(t.line);
+        t.line.material.dispose();
+        this.tracers.splice(i, 1);
       }
     }
   }
 
-  return {
-    state,
-    def,
-    step,
-    ready() {
-      return state.mag > 0 && state.cooldown === 0 && state.reloadLeft === 0;
-    },
-    pullTrigger() {
-      state.cooldown = def().fireGap;
-      state.flash = MUZZLE_TIME;
-      state.kick = def().id === 'sniper' ? 0.12 : 0.055;
-    },
-    takeRound() {
-      if (state.mag <= 0) return false;
-      state.mag -= 1;
-      return true;
-    },
-    reload() {
-      if (state.reloadLeft > 0 || state.mag === def().mag || state.reserve === 0) return false;
-      state.reloadLeft = def().reloadTime;
-      return true;
-    },
-    spread(speed, aiming) {
-      const d = def();
-      const moving = Math.min(1, speed / 5.2);
-      let s = d.spreadStill + moving * d.spreadMoving;
-      if (aiming) s *= 0.45;
-      return s;
-    },
-    switchTo(id) {
-      if (!state.owned[id] || id === state.current) return false;
-      state.current = id;
-      state.mag = WEAPONS[id].mag;
-      state.reserve = WEAPONS[id].reserve;
-      state.cooldown = 0;
-      state.reloadLeft = 0;
-      state.flash = 0;
-      showModel();
-      return true;
-    },
-    buy(id, money) {
-      const d = WEAPONS[id];
-      if (!d || state.owned[id] || money < d.price) return -1;
-      state.owned[id] = true;
-      return d.price;
-    },
-    buyGrenade(money) {
-      if (money < GRENADE_PRICE || state.grenades >= 2) return -1;
-      state.grenades += 1;
-      return GRENADE_PRICE;
-    },
-    buyArmor(money) {
-      if (money < ARMOR_PRICE || state.armor) return -1;
-      state.armor = true;
-      return ARMOR_PRICE;
-    },
-    refillRound() {
-      // Fresh magazine and reserve each round; bought weapons, grenades and
-      // armor stay until they are used or the player dies.
-      state.mag = def().mag;
-      state.reserve = def().reserve;
-      state.cooldown = 0;
-      state.reloadLeft = 0;
-      state.flash = 0;
-      state.kick = 0;
-      showModel();
-    },
-    onDeath() {
-      // Death costs the bought primary, the armor and the grenades; the
-      // issued pistol and rifle stay.
-      state.owned = { pistol: true, rifle: true };
-      state.grenades = 0;
-      state.armor = false;
-      if (!state.owned[state.current]) this.switchTo('rifle');
-      showModel();
-    },
-    resetMatch() {
-      state.owned = { pistol: true, rifle: true };
-      state.current = 'rifle';
-      state.grenades = 0;
-      state.armor = false;
-      this.refillRound();
-    },
-  };
+  spawnTracer(from, to, color) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      from.x, from.y, from.z, to.x, to.y, to.z,
+    ]), 3));
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }));
+    this.scene.add(line);
+    this.tracers.push({ line, life: 1 });
+    if (this.tracers.length > 24) {
+      const old = this.tracers.shift();
+      this.scene.remove(old.line);
+      old.line.material.dispose();
+    }
+  }
+
+  // Fire one trigger pull. targets: [{pos, headY, bodyY, alive, team, id, name,
+  // takeDamage(dmg, head, attacker)}]. world: for wall blocking. Returns the
+  // number of hits landed.
+  fire(now, origin, dir, targets, world, opts = {}) {
+    const w = this.def;
+    const st = this.state;
+    if (!st) return 0;
+    if (!this.canFire(now)) return 0;
+    if (st.mag <= 0) {
+      if (this.onDryFire) this.onDryFire();
+      this.lastShot = now;
+      this.startReload(now);
+      return 0;
+    }
+    this.lastShot = now;
+    st.mag -= 1;
+    this.heat = Math.min(1, this.heat + (w.kind === 'shotgun' ? 0.5 : 0.16));
+    if (this.onShot) this.onShot(w.kind);
+    const pellets = w.pellets || 1;
+    const spread = opts.spread ?? w.spread;
+    let hits = 0;
+    for (let p = 0; p < pellets; p += 1) {
+      const d = new THREE.Vector3(
+        dir.x + (Math.random() * 2 - 1) * spread,
+        dir.y + (Math.random() * 2 - 1) * spread,
+        dir.z + (Math.random() * 2 - 1) * spread,
+      ).normalize();
+      // Nearest wall along the ray.
+      let wallT = w.range;
+      for (const b of world.colliders) {
+        const t = rayHitsBox(origin.x, origin.y, origin.z, d.x, d.y, d.z, b);
+        if (t < wallT) wallT = t;
+      }
+      // Nearest target: head sphere first, then body sphere.
+      let best = null, bestT = wallT, bestHead = false;
+      for (const t of targets) {
+        if (!t.alive) continue;
+        const th = rayHitsSphere(origin.x, origin.y, origin.z, d.x, d.y, d.z, t.pos.x, t.pos.y + 1.52, t.pos.z, 0.24);
+        if (th < bestT) { best = t; bestT = th; bestHead = true; continue; }
+        const tb = rayHitsSphere(origin.x, origin.y, origin.z, d.x, d.y, d.z, t.pos.x, t.pos.y + 0.85, t.pos.z, 0.46);
+        if (tb < bestT) { best = t; bestT = tb; bestHead = false; }
+      }
+      const end = new THREE.Vector3().copy(origin).addScaledVector(d, Math.min(bestT, w.range));
+      this.spawnTracer(origin, end, w.tracer);
+      if (best) {
+        const dmg = w.damage * (bestHead ? w.headMult : 1);
+        const killed = best.takeDamage(dmg, bestHead, opts.attacker || 'player');
+        hits += 1;
+        if (this.onHit) this.onHit(best, dmg, bestHead, killed);
+        if (killed && this.onKill) this.onKill(best);
+      }
+    }
+    return hits;
+  }
+
+  // Bot-fired shot: same ray test, but the target is the player (or a bot).
+  // spread is passed in by the bot's aim error. Returns {hit, head, killed}.
+  fireAt(now, origin, dir, spread, target, world, attacker) {
+    const w = this.def;
+    const d = new THREE.Vector3(
+      dir.x + (Math.random() * 2 - 1) * spread,
+      dir.y + (Math.random() * 2 - 1) * spread,
+      dir.z + (Math.random() * 2 - 1) * spread,
+    ).normalize();
+    let wallT = w.range;
+    for (const b of world.colliders) {
+      const t = rayHitsBox(origin.x, origin.y, origin.z, d.x, d.y, d.z, b);
+      if (t < wallT) wallT = t;
+    }
+    if (!target.alive) return { hit: false };
+    const th = rayHitsSphere(origin.x, origin.y, origin.z, d.x, d.y, d.z, target.pos.x, target.pos.y + 1.52, target.pos.z, 0.24);
+    const tb = rayHitsSphere(origin.x, origin.y, origin.z, d.x, d.y, d.z, target.pos.x, target.pos.y + 0.85, target.pos.z, 0.46);
+    const t = Math.min(th, tb);
+    const end = new THREE.Vector3().copy(origin).addScaledVector(d, Math.min(t === Infinity ? wallT : t, w.range));
+    this.spawnTracer(origin, end, w.tracer);
+    if (t < wallT && t !== Infinity) {
+      const head = th <= tb;
+      const dmg = w.damage * (head ? w.headMult : 1);
+      const killed = target.takeDamage(dmg, head, attacker);
+      return { hit: true, head, killed };
+    }
+    return { hit: false };
+  }
 }
