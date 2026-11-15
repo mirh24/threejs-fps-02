@@ -43,9 +43,13 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 // Start from a clean output directory so a stale screenshot or dossier
-// from an earlier run can never leak into this one.
-rmSync(out, { recursive: true, force: true });
+// from an earlier run can never leak into this one. Clear only the
+// entry's own outputs, never the output directory itself: the grader
+// mounts it, and its parent is read-only, so removing it fails there.
 mkdirSync(out, { recursive: true });
+for (const name of ['game', 'screenshots', 'dossier.json']) {
+  rmSync(join(out, name), { recursive: true, force: true });
+}
 
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
